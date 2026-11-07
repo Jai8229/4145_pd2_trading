@@ -40,10 +40,11 @@ def fallback_heuristic_analysis(ticker: str, signals: dict, fundamental: dict) -
 
 def generate_ai_analysis(ticker: str, signals: dict, fundamental: dict, openai_api_key: str = None) -> str:
     """
-    調用 LLM 生成深度投資診斷，已加入逾時限制與完全例外防禦機制，防止介面卡死
+    調用 LLM 生成深度投資診斷，加入嚴格超時與代理錯誤防禦，確保絕不卡死
     """
-    # 檢查 API Key 是否有效
-    if not openai_api_key or not str(openai_api_key).strip().startswith("sk-"):
+    clean_key = str(openai_api_key).strip() if openai_api_key else ""
+    # 若 API Key 未提供或格式不符，直接使用本地規則引擎，不發出任何網絡請求
+    if not clean_key or not clean_key.startswith("sk-"):
         return fallback_heuristic_analysis(ticker, signals, fundamental)
 
     prompt_context = f"""
@@ -71,12 +72,30 @@ MACD 趨勢判斷: {signals.get('macd_signal')} ({signals.get('macd_reason')})
     user_prompt = f"請根據以下量化數據生成一份投資診斷報告：\n{prompt_context}"
 
     try:
-        # 強制加入超時限制 (5秒) 並關閉無效重試，防止網絡異常時卡死
-        client = openai.OpenAI(
-            api_key=openai_api_key.strip(),
-            timeout=5.0,
-            max_retries=0
-        )
+        # 若環境中存在 litellm 全域變量，設定保護防止背景無窮重試
+        try:
+            import litellm
+            litellm.num_retries = 0
+            litellm.request_timeout = 4.0
+            litellm.drop_params = True
+        except ImportError:
+            pass
+
+        # 檢測自訂代理 Base URL，若環境變量為無效路徑則退回標準 OpenAI 端點
+        custom_base = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
+        if custom_base and not custom_base.rstrip("/").endswith("/v1"):
+            custom_base = custom_base.rstrip("/") + "/v1"
+
+        client_kwargs = {
+            "api_key": clean_key,
+            "timeout": 4.0,       # 4 秒硬性超時限制，防止連線掛起
+            "max_retries": 0      # 嚴格禁止重試，防止反覆嘗試被阻擋的網絡端點
+        }
+        if custom_base:
+            client_kwargs["base_url"] = custom_base
+
+        client = openai.OpenAI(**client_kwargs)
+
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -86,8 +105,12 @@ MACD 趨勢判斷: {signals.get('macd_signal')} ({signals.get('macd_reason')})
             temperature=0.3,
             max_tokens=700
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+        if not content or "<!DOCTYPE html>" in content:
+            raise ValueError("收到無效的 HTML 響應")
+        return content
+
     except BaseException as e:
-        # 捕捉包括 litellm.APIError, OpenAIException, HTML 錯誤頁面等所有異常，自動降級
-        error_msg = f"（提示：AI 線上服務暫時無法連線 [{type(e).__name__}]，已即時切換至量化專家系統生成報告）\n\n"
-        return error_msg + fallback_heuristic_analysis(ticker, signals, fundamental)
+        # 完全攔截所有異常（包含 litellm.APIError / HTML 報錯 / 連線逾時），自動切換至專家規則引擎
+        error_notice = f"（提示：AI 線上 API 連線受限 [{type(e).__name__}]，已自動切換至量化專家系統生成報告）\n\n"
+        return error_notice + fallback_heuristic_analysis(ticker, signals, fundamental)
