@@ -2,3 +2,5 @@
 instu.md
 .venv
 __pycache__/
+llm_analyst.py
+trading_app.db

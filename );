@@ -1,5 +1,0 @@
-# PowerShell
-Remove-Item "streamlit run app.py"
-Remove-Item "pip install -r requirements.txt"
-# 刪除檔名含樹狀字符的雜物檔案
-Get-ChildItem | Where-Object { $_.Name -match '└──' } | Remove-Item -Force
