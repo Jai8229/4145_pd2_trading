@@ -1,0 +1,52 @@
+
+---
+
+## 📊 功能模組詳細說明
+
+### A. 個股策略分析（strategies.py）
+
+| 函式 | 功能描述 |
+|------|----------|
+| `fetch_stock_data(ticker, period)` | 透過 `yfinance` 抓取指定週期（6mo / 1y / 2y / 5y）的歷史股價 OHLCV 數據 |
+| `fetch_fundamental_info(ticker)` | 抓取基本面資訊（Trailing P/E、Forward P/E、市值、貨幣、行業板塊等） |
+| `calculate_macd(df)` | 計算 MACD 快線（EMA12 - EMA26）、訊號線（EMA9）及 Histogram 柱狀值 |
+| `generate_signals(df, fundamental)` | 融合技術面與基本面，輸出加權交易信號與綜合結論 |
+| `calculate_portfolio_metrics(...)` | 計算投資組合的年化收益率、波動率、夏普比率及個股對比指標 |
+
+**信號判讀邏輯（四種綜合結論）：**
+1. **強烈買入 (STRONG BUY)** — MACD 金叉 + P/E 處於合理偏低區間（動量與估值同步支持）
+2. **投機性買入 (SPECULATIVE BUY)** — MACD 金叉但估值偏高（短線動能強，安全邊際不足）
+3. **左側佈局 / 分注吸納 (ACCUMULATE)** — 估值低廉但技術面尚未轉強（低估值防守策略）
+4. **建議減持 / 賣出 (SELL)** — MACD 死叉，技術指標轉弱
+
+**P/E 估值分級標準：**
+* P/E < 15 → 估值具吸引力（價值型標的）
+* 15 ≤ P/E ≤ 30 → 合理成長範圍
+* P/E > 30 → 估值偏高，留意成長預期兌現風險
+* P/E 不可用或為負 → 可能處於虧損狀態
+
+### B. 投資組合與夏普比率（Tab 2）
+
+* 輸入多隻股票代號（以逗號分隔）及自訂權重，系統自動：
+  1. 下載近一年歷史收盤價並計算每日收益率；
+  2. 以 252 個交易日年化，計算組合預期年化回報率；
+  3. 建構協方差矩陣，推導組合年化波動率；
+  4. 計算夏普比率：(組合年化回報 − 無風險利率) / 組合波動率。
+* 同時輸出**個股層面**的年化回報、波動率與夏普比率對比表，方便判斷哪隻股票拖累組合表現。
+* 附帶**歷史累計淨值走勢圖**（基準點 = 1.0），直觀比較各資產表現。
+
+> 💡 夏普比率參考標準：> 1 代表良好，> 2 代表優秀，負值代表表現遜於無風險利率。
+
+### C. 持倉管理與交易日誌（database.py）
+
+| 函式 | 功能描述 |
+|------|----------|
+| `init_db()` | 初始化數據庫，建立 `portfolio` 與 `trade_history` 兩張資料表 |
+| `add_position(ticker, shares, cost_price)` | 新增持倉紀錄 |
+| `get_portfolio()` | 以 DataFrame 形式讀取全部持倉 |
+| `delete_position(position_id)` | 按 ID 刪除指定持倉 |
+| `record_trade(ticker, action, shares, price, strategy_signal)` | 記錄模擬交易及其觸發的策略信號（供日後複盤） |
+| `get_trade_history()` | 按時間倒序讀取完整交易歷史日誌 |
+
+**數據庫架構：**
+
