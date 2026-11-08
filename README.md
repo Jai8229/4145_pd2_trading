@@ -1,6 +1,6 @@
 # AI 智投顧問 (FinTech Trading AI)
 
-專為非專業散戶投資者量身打造的量化策略與資產管理增強工具。本專案建基於輕量級架構，支援即時多股票數據抓取、量化指標（MACD、夏普比率、市盈率 P/E）計算、互動視覺化、SQLite 本地持久化數據庫以及 LLM 生成的專業投顧分析報告。
+專為非專業散戶投資者量身打造的量化策略與資產管理增強工具。本專案建基於輕量級架構，支援即時多股票數據抓取、量化指標（MACD、夏普比率、市盈率 P/E）計算、互動視覺化、SQLite 本地持久化數據庫以及 LLM 生成的專業投顧分析報告。全系統支援**中英雙語介面**，可於側邊欄一鍵即時切換。
 
 ---
 
@@ -59,15 +59,24 @@
 
 首次啟動時，系統會自動呼叫 `database.init_db()` 於專案根目錄建立 `trading_app.db` SQLite 數據庫檔案，無需任何手動設定或遷移腳本。
 
+### 4. 介面語言切換 (Language Switching)
+
+於側邊欄頂部的「🌐 Language / 語言」選項中選擇 **中文 (繁體)** 或 **English**，即可即時切換整個應用程式介面，包括：
+
+* 所有分頁標題、按鈕、表單與提示訊息
+* 策略訊號與估值評估文本（strategies.py 輸出）
+* LLM / 專家規則引擎生成的投顧報告語言（llm_analyst.py）
+* 圖表標題與座標軸標籤
+
 ---
 
 ## 📂 專案結構
 
     .
-    ├── app.py               # Streamlit 主應用程式（三大分頁 UI 與互動邏輯）
-    ├── strategies.py        # 量化策略核心（數據抓取、MACD、夏普比率、組合分析）
+    ├── app.py               # Streamlit 主應用程式（三大分頁 UI、雙語介面與互動邏輯）
+    ├── strategies.py        # 量化策略核心（數據抓取、MACD、夏普比率、組合分析、雙語訊號）
     ├── database.py          # SQLite 數據庫操作（持倉管理、交易歷史）
-    ├── llm_analyst.py       # LLM 分析引擎（OpenAI 整合 + 啟發式 Fallback 規則引擎）
+    ├── llm_analyst.py       # LLM 分析引擎（OpenAI 整合 + 啟發式 Fallback 規則引擎，支援雙語）
     ├── requirements.txt     # Python 依賴清單
     ├── trading_app.db       # SQLite 本地數據庫（首次運行自動生成，二進制檔案）
     └── README.md            # 專案完整設計架構與使用文件
@@ -83,7 +92,7 @@
 | `fetch_stock_data(ticker, period)` | 透過 `yfinance` 抓取指定週期（6mo / 1y / 2y / 5y）的歷史股價 OHLCV 數據 |
 | `fetch_fundamental_info(ticker)` | 抓取基本面資訊（Trailing P/E、Forward P/E、市值、貨幣、行業板塊等） |
 | `calculate_macd(df)` | 計算 MACD 快線（EMA12 - EMA26）、訊號線（EMA9）及 Histogram 柱狀值 |
-| `generate_signals(df, fundamental)` | 融合技術面與基本面，輸出加權交易信號與綜合結論 |
+| `generate_signals(df, fundamental, language)` | 融合技術面與基本面，輸出加權交易信號與綜合結論（支援中文 / English 雙語文本） |
 | `calculate_portfolio_metrics(...)` | 計算投資組合的年化收益率、波動率、夏普比率及個股對比指標 |
 
 **信號判讀邏輯（四種綜合結論）：**
@@ -147,8 +156,8 @@
 
 | 函式 | 功能描述 |
 |------|----------|
-| `generate_ai_analysis(ticker, signals, fundamental, openai_api_key)` | 呼叫 OpenAI API（gpt-3.5-turbo）生成專業白話分析報告 |
-| `fallback_heuristic_analysis(ticker, signals, fundamental)` | 無 API Key 時的啟發式規則引擎，基於量化信號生成香港語境解讀 |
+| `generate_ai_analysis(ticker, signals, fundamental, openai_api_key, language)` | 呼叫 OpenAI API（gpt-3.5-turbo）生成專業白話分析報告（語言跟隨介面設定） |
+| `fallback_heuristic_analysis(ticker, signals, fundamental, language)` | 無 API Key 時的啟發式規則引擎，基於量化信號生成香港語境解讀（支援雙語） |
 
 **運作流程與防禦機制：**
 1. 使用者可於側邊欄輸入自訂 OpenAI API Key（僅存於工作階段，不會寫入數據庫）。
@@ -156,6 +165,7 @@
 3. 若無 Key 或格式不符 → 直接使用本地啟發式規則引擎，不發出任何網絡請求。
 4. 若 API 異常（逾時 / 代理伺服器錯誤 / 無效 HTML 響應）→ 自動攔截並切換至 Fallback 引擎，確保報告永不中斷。
 5. 內置 **4 秒硬性超時** 與 **零重試** 設定（`timeout=4.0`、`max_retries=0`），徹底防止連線掛起卡頓。
+6. 報告語言自動跟隨側邊欄的介面語言設定（中文 / English）。
 
 **報告內容架構（LLM 版）：**
 1. 技術面與動能分析（解讀 MACD 訊號及背離狀況）
@@ -172,6 +182,7 @@
 3. **記錄持倉**：在「倉位管理」分頁將實際持倉（股數、成本價）寫入 SQLite 數據庫，建立個人持倉清單。
 4. **模擬交易複盤**：每次模擬買賣時記錄策略訊號與動機，日後透過交易歷史日誌檢視決策質素，培養投資紀律。
 5. **善用 AI 報告**：有 API Key 時開啟 LLM 深度分析；無 Key 亦可靠啟發式引擎獲得基本解讀。
+6. **雙語介面**：於側邊欄頂部「🌐 Language / 語言」一鍵切換中文 / English，所有分頁、訊號、報告與圖表文本即時同步切換。
 
 ---
 
