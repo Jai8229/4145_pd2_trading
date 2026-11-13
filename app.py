@@ -41,7 +41,9 @@ TRANSLATIONS = {
         "tab2": "💼 投資組合分析與夏普比率 (Sharpe Ratio)",
         "tab3": "🗄️ 倉位管理與模擬交易數據庫",
         "tab1_header": "📈 單股多因子策略：MACD 技術動態與 P/E 估值結合",
-        "ticker_label": "輸入股票代號 (支援美股/港股，如 AAPL, MSFT, 0700.HK):",
+        "ticker_label": "輸入股票代號或公司名稱 (支援模糊搜尋，如 AAPL、Apple、0700.HK):",
+        "stock_match_label": "選擇最接近的股票:",
+        "stock_match_help": "可輸入不完整的股票名稱或代號，系統會從 Yahoo Finance 顯示最接近的結果。",
         "period_label": "分析週期:",
         "run_button": "執行 AI 診斷",
         "fetching_spinner": "正在抓取 {ticker} 實時行情與財務基本面數據...",
@@ -122,7 +124,9 @@ TRANSLATIONS = {
         "tab2": "💼 Portfolio Analytics & Sharpe Ratio",
         "tab3": "🗄️ Position Management & Simulated Trading Database",
         "tab1_header": "📈 Single-Stock Multi-Factor Strategy: MACD Momentum + P/E Valuation",
-        "ticker_label": "Enter ticker (US/HK stocks, e.g. AAPL, MSFT, 0700.HK):",
+        "ticker_label": "Enter a ticker or company name (fuzzy search, e.g. AAPL, Apple, 0700.HK):",
+        "stock_match_label": "Choose the closest stock match:",
+        "stock_match_help": "Enter a partial company name or ticker and choose the closest Yahoo Finance result.",
         "period_label": "Analysis period:",
         "run_button": "Run AI Diagnosis",
         "fetching_spinner": "Fetching real-time market data and fundamentals for {ticker}...",
@@ -224,13 +228,27 @@ with tabs[0]:
     
     col_input1, col_input2, col_input3 = st.columns([2, 1, 1])
     with col_input1:
-        selected_ticker = st.text_input(t("ticker_label"), value="AAPL").upper().strip()
+        stock_query = st.text_input(t("ticker_label"), value="AAPL").strip()
     with col_input2:
         period_choice = st.selectbox(t("period_label"), ["6mo", "1y", "2y", "5y"], index=1)
     with col_input3:
         run_analysis = st.button(t("run_button"), use_container_width=True)
 
-    if selected_ticker:
+    selected_ticker = stock_query.upper()
+    if stock_query:
+        candidates = strategies.search_stock_candidates(stock_query)
+        if candidates and candidates[0]["symbol"] != selected_ticker:
+            candidate_options = [
+                f'{candidate["symbol"]} — {candidate["name"]}'
+                for candidate in candidates
+            ]
+            selected_option = st.selectbox(
+                t("stock_match_label"),
+                candidate_options,
+                help=t("stock_match_help"),
+            )
+            selected_ticker = selected_option.split(" — ", 1)[0]
+
         try:
             with st.spinner(t("fetching_spinner").format(ticker=selected_ticker)):
                 stock_data = strategies.fetch_stock_data(selected_ticker, period=period_choice)
