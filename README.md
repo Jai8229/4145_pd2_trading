@@ -90,6 +90,8 @@
 
 ### A. 個股策略分析（strategies.py）
 
+* 支援以完整或不完整的股票名稱、股票代號進行模糊搜尋，系統會從 Yahoo Finance 顯示最接近的股票結果供使用者選擇。
+
 | 函式 | 功能描述 |
 |------|----------|
 | `fetch_stock_data(ticker, period)` | 透過 `yfinance` 抓取指定週期（6mo / 1y / 2y / 5y）的歷史股價 OHLCV 數據 |

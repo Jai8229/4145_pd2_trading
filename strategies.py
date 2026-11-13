@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from difflib import SequenceMatcher
 
 # ==================== 多語言訊號文本 (Signal Text i18n) ====================
 _MACD_TEXTS = {
@@ -59,6 +60,58 @@ _VERDICT_COLORS = {
     "accumulate": "green",
     "neutral": "orange",
 }
+
+def search_stock_candidates(query: str, max_results: int = 5) -> list[dict]:
+    """Search Yahoo Finance for ticker/company-name matches."""
+    query = query.strip()
+    if not query:
+        return []
+
+    try:
+        quotes = yf.Search(query).quotes
+    except Exception:
+        return []
+
+    normalized_query = query.casefold()
+    candidates = []
+    for quote in quotes:
+        symbol = str(quote.get("symbol", "")).strip().upper()
+        name = str(
+            quote.get("shortname")
+            or quote.get("longname")
+            or quote.get("name")
+            or ""
+        ).strip()
+        if not symbol or not name:
+            continue
+
+        symbol_score = SequenceMatcher(
+            None, normalized_query, symbol.casefold()
+        ).ratio()
+        name_score = SequenceMatcher(
+            None, normalized_query, name.casefold()
+        ).ratio()
+        exact_bonus = 1.0 if normalized_query == symbol.casefold() else 0.0
+        candidates.append(
+            {
+                "symbol": symbol,
+                "name": name,
+                "score": max(symbol_score, name_score) + exact_bonus,
+                "exact_symbol": normalized_query == symbol.casefold(),
+                "name_startswith_query": name.casefold().startswith(normalized_query),
+            }
+        )
+
+    candidates.sort(
+        key=lambda candidate: (
+            candidate["exact_symbol"],
+            candidate["name_startswith_query"],
+            -len(candidate["name"]),
+            candidate["score"],
+        ),
+        reverse=True,
+    )
+    return candidates[:max_results]
 
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     """下載指定股票的歷史數據"""

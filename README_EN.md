@@ -89,6 +89,8 @@ In the "🌐 Language / 語言" option at the top of the sidebar, choose **中�
 
 ### A. Individual Stock Strategy Analysis (strategies.py)
 
+* Supports fuzzy search by full or partial company name and ticker, showing the closest Yahoo Finance matches for the user to select.
+
 | Function | Description |
 |------|----------|
 | `fetch_stock_data(ticker, period)` | Fetches historical OHLCV price data for the specified period (6mo / 1y / 2y / 5y) via `yfinance` |
