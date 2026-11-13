@@ -62,13 +62,45 @@ def fallback_heuristic_analysis(ticker: str, signals: dict, fundamental: dict, l
 """
     return report
 
+
+def _build_candidate_configs() -> list[dict]:
+    """
+    生成多組 (base_url, models) 候選組合，用於解決 NotFoundError (HTTP 404)。
+    404 通常由於：
+      (1) OPENAI_BASE_URL 路徑格式不符（例如多了或少了 /v1 後綴）；
+      (2) 該 API Key 所屬帳戶沒有指定模型（如 gpt-3.5-turbo）的存取權限。
+    """
+    custom_base = (os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE") or "").strip()
+    env_model = (os.environ.get("OPENAI_MODEL") or os.environ.get("OPENAI_API_MODEL") or "").strip()
+
+    # 模型候選清單：環境變量指定的模型優先，其後為通用備選
+    models = [m for m in (env_model, "gpt-3.5-turbo", "gpt-4o-mini") if m]
+
+    candidates = []
+    if custom_base:
+        base = custom_base.rstrip("/")
+        # 1) 先按用戶原設定嘗試（不少第三方代理不需要 /v1 後綴）
+        candidates.append({"base_url": base, "models": models})
+        # 2) 若原設定失敗，補上 /v1 再試（官方及多數代理的格式）
+        if not base.endswith("/v1"):
+            candidates.append({"base_url": base + "/v1", "models": models})
+    # 3) 最後一律退回官方端點，避免環境變量設錯導致永遠失敗
+    candidates.append({"base_url": None, "models": models})
+    return candidates
+
+
 def generate_ai_analysis(ticker: str, signals: dict, fundamental: dict, openai_api_key: str = None, language: str = "zh") -> str:
     """
     調用 LLM 生成深度投資診斷，加入嚴格超時與代理錯誤防禦，確保絕不卡死 (支援 zh / en)
+
+    針對 NotFoundError (HTTP 404) 的防禦：
+    - 依序嘗試多組 (base_url, model) 組合：用戶原設定 → 補上 /v1 → 官方端點；
+    - 模型名稱可透過環境變量 OPENAI_MODEL 指定，否則依序嘗試 gpt-3.5-turbo 及 gpt-4o-mini。
     """
     clean_key = str(openai_api_key).strip() if openai_api_key else ""
-    # 若 API Key 未提供或格式不符，直接使用本地規則引擎，不發出任何網絡請求
-    if not clean_key or not clean_key.startswith("sk-"):
+    # 若 API Key 未提供，直接使用本地規則引擎，不發出任何網絡請求
+    # （放寬原本強制 sk- 開頭的檢查，以兼容第三方代理服務的金鑰格式）
+    if not clean_key:
         return fallback_heuristic_analysis(ticker, signals, fundamental, language=language)
 
     if language == "en":
@@ -126,39 +158,75 @@ MACD 趨勢判斷: {signals.get('macd_signal')} ({signals.get('macd_reason')})
         except ImportError:
             pass
 
-        # 檢測自訂代理 Base URL，若環境變量為無效路徑則退回標準 OpenAI 端點
-        custom_base = os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
-        if custom_base and not custom_base.rstrip("/").endswith("/v1"):
-            custom_base = custom_base.rstrip("/") + "/v1"
+        # 讀取超時設定（預設 20 秒；原本 4 秒對 LLM 生成而言過短，容易誤報失敗）
+        try:
+            timeout = float(os.environ.get("OPENAI_TIMEOUT", "20"))
+        except (TypeError, ValueError):
+            timeout = 20.0
+        if timeout <= 0:
+            timeout = 20.0
 
-        client_kwargs = {
-            "api_key": clean_key,
-            "timeout": 4.0,       # 4 秒硬性超時限制，防止連線掛起
-            "max_retries": 0      # 嚴格禁止重試，防止反覆嘗試被阻擋的網絡端點
-        }
-        if custom_base:
-            client_kwargs["base_url"] = custom_base
+        last_error = None
+        hard_fail = False
 
-        client = openai.OpenAI(**client_kwargs)
+        for cfg in _build_candidate_configs():
+            client_kwargs = {
+                "api_key": clean_key,
+                "timeout": timeout,   # 硬性超時限制，防止連線掛起
+                "max_retries": 0      # 嚴格禁止重試，防止反覆嘗試被阻擋的網絡端點
+            }
+            if cfg["base_url"]:
+                client_kwargs["base_url"] = cfg["base_url"]
 
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.3,
-            max_tokens=700
-        )
-        content = response.choices[0].message.content
-        if not content or "<!DOCTYPE html>" in content:
-            raise ValueError("收到無效的 HTML 響應")
-        return content
+            client = openai.OpenAI(**client_kwargs)
+
+            for model in cfg["models"]:
+                try:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        temperature=0.3,
+                        max_tokens=700
+                    )
+                    content = response.choices[0].message.content
+                    if not content or "<!DOCTYPE html>" in content:
+                        raise ValueError("收到無效的 HTML 響應")
+                    return content
+                except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
+                    # 金鑰無效或無權限：重試其他端點/模型亦無幫助，直接終止所有嘗試
+                    last_error = e
+                    hard_fail = True
+                    break
+                except openai.NotFoundError as e:
+                    # HTTP 404：模型不存在或端點路徑不符 → 換下一個模型 / 端點再試
+                    last_error = e
+                    continue
+                except Exception as e:
+                    # 連線逾時或其他錯誤 → 換下一個端點再試（同一端點換模型無幫助）
+                    last_error = e
+                    break
+            if hard_fail:
+                break
+
+        # 所有候選組合均失敗，拋出最後一次的錯誤以觸發 fallback
+        raise last_error if last_error is not None else RuntimeError("AI 請求全部失敗")
 
     except BaseException as e:
         # 完全攔截所有異常（包含 litellm.APIError / HTML 報錯 / 連線逾時），自動切換至專家規則引擎
-        if language == "en":
-            error_notice = f"(Note: online AI API connection unavailable [{type(e).__name__}]; automatically switched to the quantitative expert rule engine)\n\n"
+        not_found_cls = getattr(openai, "NotFoundError", ())
+        if isinstance(e, not_found_cls):
+            if language == "en":
+                extra_hint = " (Hint: HTTP 404 usually means this API key has no access to the model, or OPENAI_BASE_URL path is malformed. You can set OPENAI_MODEL in Streamlit Secrets to force an available model.)"
+            else:
+                extra_hint = "（小提示：404 通常表示此 API Key 無權使用該模型，或 OPENAI_BASE_URL 路徑格式有誤；可在 Streamlit Secrets 設定 OPENAI_MODEL 指定可用模型。）"
         else:
-            error_notice = f"（提示：AI 線上 API 連線受限 [{type(e).__name__}]，已自動切換至量化專家系統生成報告）\n\n"
+            extra_hint = ""
+
+        if language == "en":
+            error_notice = f"(Note: online AI API connection unavailable [{type(e).__name__}]; automatically switched to the quantitative expert rule engine){extra_hint}\n\n"
+        else:
+            error_notice = f"（提示：AI 線上 API 連線受限 [{type(e).__name__}]，已自動切換至量化專家系統生成報告）{extra_hint}\n\n"
         return error_notice + fallback_heuristic_analysis(ticker, signals, fundamental, language=language)
